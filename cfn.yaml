@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: A basic Lambda function with API Gateway invocation
+
+Parameters:
+  StageName:
+    Type: String
+    AllowedPattern: "[a-z0-9]+"
+    Default: test
+    Description: The name of the API gateway stage name
+
+Resources:
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          function sortAndGroup(numbers) {
+            const ordered = [...new Set(numbers)].toSorted((a, b) => a - b);
+            const result = [];
+
+            for (let i = 0; i < ordered.length; i++)
+            {
+                const start = ordered[i];
+
+                while (i < ordered.length - 1 && ordered[i + 1] == ordered[i] + 1)
+                    i++;
+
+                result.push(
+                  start == ordered[i] ? start.toString() : `${start}-${ordered[i]}`);
+            }
+
+            return result.join();
+          }
+
+          exports.handler = function(event)
+          {
+              const numbers = (event.queryStringParameters?.numbers || '').split(',')
+                .map((x) => parseInt(x, 10));
+              
+              return {
+                statusCode: 200,
+                headers: { 'Content-Type': 'text/plain' },
+                body: sortAndGroup(numbers)
+            }
+          };
+      PackageType: Zip
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: nodejs24.x
+      SnapStart:
+        ApplyOn: None # Set to PublishedVersions if there's a startup-induced latency issue
+
+  LambdaInvocation:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/${StageName}/GET/consolidated-numbers
+
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: Consolidated Numbers API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  ApiLambdaResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      PathPart: "consolidated-numbers"
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      RestApiId: !Ref ApiGateway
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: true
+      AuthorizationType: NONE
+      HttpMethod: GET
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+      RequestParameters:
+        method.request.querystring.numbers: true
+      ResourceId: !Ref ApiLambdaResource
+      RestApiId: !Ref ApiGateway
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref StageName
+
+  ApiKeyBarry:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Description: Barry's API Key
+      Enabled: true
+      Tags:
+        - Key: TenantID
+          Value: 4000
+
+  ApiKeyKeith:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Description: Keith's API Key
+      Enabled: true
+      Tags:
+        - Key: TenantID
+          Value: 4000
+
+  ApiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ApiGateway
+          Stage: !Ref StageName
+
+  ApiUsagePlanApiKeyBarry:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ApiKeyBarry
+      KeyType: API_KEY
+      UsagePlanId: !Ref ApiUsagePlan
+
+  ApiUsagePlanApiKeyKeith:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ApiKeyKeith
+      KeyType: API_KEY
+      UsagePlanId: !Ref ApiUsagePlan
+
+Outputs:
+  ApiGatewayUrl:
+    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/consolidated-numbers
