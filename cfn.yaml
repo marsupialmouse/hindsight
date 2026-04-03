@@ -125,7 +125,7 @@ Resources:
       Enabled: true
       Tags:
         - Key: TenantID
-          Value: 4000
+          Value: 5000
 
   ApiUsagePlan:
     Type: AWS::ApiGateway::UsagePlan
